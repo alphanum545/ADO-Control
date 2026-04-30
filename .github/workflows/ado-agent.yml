@@ -1,0 +1,225 @@
+name: ADO Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      objective:
+        description: "What should the ADO agent do?"
+        required: true
+        type: string
+      project:
+        description: "ADO project name for scoped context, for example Alpha"
+        required: false
+        default: ""
+        type: string
+      source:
+        description: "Context sent to the LLM before planning"
+        required: true
+        default: "projects"
+        type: choice
+        options:
+          - projects
+          - project
+          - iterations
+          - recent
+          - ids
+      ids:
+        description: "Work item IDs when source=ids, for example 163,164"
+        required: false
+        default: ""
+        type: string
+      recent_days:
+        description: "Days of recent work items when source=recent"
+        required: true
+        default: "7"
+        type: string
+      max_items:
+        description: "Maximum context work items"
+        required: true
+        default: "30"
+        type: string
+      max_actions:
+        description: "Maximum actions allowed in the generated plan"
+        required: true
+        default: "10"
+        type: string
+      apply:
+        description: "Apply the validated plan after the approval-gated apply job starts"
+        required: true
+        default: false
+        type: boolean
+      allow_delete:
+        description: "Allow delete actions to survive validation"
+        required: true
+        default: false
+        type: boolean
+      allow_project_delete:
+        description: "Allow project delete actions to survive validation"
+        required: true
+        default: false
+        type: boolean
+      hard_delete:
+        description: "Permanently destroy deleted work items instead of recycle-bin delete"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ado-agent-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan and dry run
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ADO_ORG: ${{ secrets.ADO_ORG }}
+      ADO_PAT: ${{ secrets.ADO_PAT }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || vars.LLM_BASE_URL || 'https://api.openai.com/v1' }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL || vars.LLM_MODEL || 'gpt-4o' }}
+      LLM_TEMPERATURE: ${{ vars.LLM_TEMPERATURE || '0' }}
+      DEFAULT_WORK_ITEM_ASSIGNEE: ${{ vars.DEFAULT_WORK_ITEM_ASSIGNEE || 'silaparasetti.lohith@maqsoftware.com' }}
+      DEFAULT_PROJECT_PROCESS: ${{ vars.DEFAULT_PROJECT_PROCESS || 'Agile' }}
+      DEFAULT_PROJECT_VISIBILITY: ${{ vars.DEFAULT_PROJECT_VISIBILITY || 'private' }}
+      OBJECTIVE: ${{ inputs.objective }}
+      PROJECT: ${{ inputs.project }}
+      SOURCE: ${{ inputs.source }}
+      IDS: ${{ inputs.ids }}
+      RECENT_DAYS: ${{ inputs.recent_days }}
+      MAX_ITEMS: ${{ inputs.max_items }}
+      MAX_ACTIONS: ${{ inputs.max_actions }}
+      ALLOW_DELETE: ${{ inputs.allow_delete }}
+      ALLOW_PROJECT_DELETE: ${{ inputs.allow_project_delete }}
+      HARD_DELETE: ${{ inputs.hard_delete }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Check required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in ADO_ORG ADO_PAT LLM_API_KEY; do
+            if [[ -z "${!name}" ]]; then missing+=("${name}"); fi
+          done
+          if (( ${#missing[@]} )); then
+            printf 'Missing required GitHub secrets: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Generate validated dry-run plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "${ALLOW_DELETE}" == "true" ]]; then args+=(--allow-delete); fi
+          if [[ "${ALLOW_PROJECT_DELETE}" == "true" ]]; then args+=(--allow-project-delete); fi
+          if [[ "${HARD_DELETE}" == "true" ]]; then args+=(--hard-delete); fi
+          python -m ado_ops.actions_runner plan \
+            --objective "${OBJECTIVE}" \
+            --project "${PROJECT}" \
+            --source "${SOURCE}" \
+            --ids "${IDS}" \
+            --recent-days "${RECENT_DAYS}" \
+            --max-items "${MAX_ITEMS}" \
+            --max-actions "${MAX_ACTIONS}" \
+            --out artifacts/plan.json \
+            --markdown artifacts/plan.md \
+            "${args[@]}"
+
+      - name: Add plan to run summary
+        shell: bash
+        run: cat artifacts/plan.md >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ado-agent-plan
+          path: |
+            artifacts/plan.json
+            artifacts/plan.md
+          retention-days: 14
+
+  apply:
+    name: Apply approved plan
+    if: ${{ inputs.apply }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ado-apply
+    env:
+      ADO_ORG: ${{ secrets.ADO_ORG }}
+      ADO_PAT: ${{ secrets.ADO_PAT }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || vars.LLM_BASE_URL || 'https://api.openai.com/v1' }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL || vars.LLM_MODEL || 'gpt-4o' }}
+      LLM_TEMPERATURE: ${{ vars.LLM_TEMPERATURE || '0' }}
+      DEFAULT_WORK_ITEM_ASSIGNEE: ${{ vars.DEFAULT_WORK_ITEM_ASSIGNEE || 'silaparasetti.lohith@maqsoftware.com' }}
+      DEFAULT_PROJECT_PROCESS: ${{ vars.DEFAULT_PROJECT_PROCESS || 'Agile' }}
+      DEFAULT_PROJECT_VISIBILITY: ${{ vars.DEFAULT_PROJECT_VISIBILITY || 'private' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Check required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in ADO_ORG ADO_PAT LLM_API_KEY; do
+            if [[ -z "${!name}" ]]; then missing+=("${name}"); fi
+          done
+          if (( ${#missing[@]} )); then
+            printf 'Missing required GitHub secrets: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Download validated plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ado-agent-plan
+          path: artifacts
+
+      - name: Apply validated plan
+        run: |
+          python -m ado_ops.actions_runner apply \
+            --plan artifacts/plan.json \
+            --out artifacts/apply.json \
+            --markdown artifacts/apply.md
+
+      - name: Add apply results to run summary
+        shell: bash
+        run: cat artifacts/apply.md >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload apply artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ado-agent-apply
+          path: |
+            artifacts/apply.json
+            artifacts/apply.md
+          retention-days: 14
