@@ -178,14 +178,25 @@ class ADOClient:
         body: dict[str, Any] = {"name": name}
         attributes = {}
         if start_date:
-            attributes["startDate"] = start_date
+            attributes["startDate"] = _format_iteration_date(start_date)
         if finish_date:
-            attributes["finishDate"] = finish_date
+            attributes["finishDate"] = _format_iteration_date(finish_date)
         if attributes:
             body["attributes"] = attributes
         relative_parent = self._relative_iteration_path(project, parent_path)
         suffix = f"/{requests.utils.quote(relative_parent.replace('\\', '/'), safe='/')}" if relative_parent else ""
-        return self._post(f"{self._project_url(project)}/_apis/wit/classificationnodes/Iterations{suffix}", body)
+        created = self._post(f"{self._project_url(project)}/_apis/wit/classificationnodes/Iterations{suffix}", body)
+        if attributes and not _iteration_has_dates(created, attributes):
+            created_path = self.work_item_iteration_path(project, created, parent_path=parent_path)
+            created = self.update_iteration(
+                project,
+                created_path,
+                {
+                    "start_date": attributes.get("startDate", ""),
+                    "finish_date": attributes.get("finishDate", ""),
+                },
+            )
+        return created
 
     def update_iteration(self, project: str, path: str, fields: dict[str, Any]) -> dict[str, Any]:
         body: dict[str, Any] = {}
@@ -193,9 +204,9 @@ class ADOClient:
             body["name"] = fields["name"]
         attributes = {}
         if fields.get("start_date"):
-            attributes["startDate"] = fields["start_date"]
+            attributes["startDate"] = _format_iteration_date(str(fields["start_date"]))
         if fields.get("finish_date"):
-            attributes["finishDate"] = fields["finish_date"]
+            attributes["finishDate"] = _format_iteration_date(str(fields["finish_date"]))
         if attributes:
             body["attributes"] = attributes
         if not body:
@@ -322,3 +333,27 @@ class ADOClient:
             "url": item.get("url"),
         }
 
+
+def _format_iteration_date(value: str) -> str:
+    text = str(value).strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    else:
+        parsed = parsed.astimezone(UTC)
+    return parsed.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _iteration_has_dates(iteration: dict[str, Any], expected: dict[str, str]) -> bool:
+    attributes = iteration.get("attributes")
+    if not isinstance(attributes, dict):
+        return False
+    for key, expected_value in expected.items():
+        if expected_value and not attributes.get(key):
+            return False
+    return True
