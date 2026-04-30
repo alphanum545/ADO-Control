@@ -224,11 +224,12 @@ class ADOClient:
         return self._post(f"{self._project_url(project)}/_apis/work/teamsettings/iterations", {"id": iteration_id})
 
     def _relative_iteration_path(self, project: str, path: str) -> str:
-        clean = path.strip().strip("\\/")
-        prefix = f"{project}\\"
-        if clean.lower().startswith(prefix.lower()):
-            return clean[len(prefix) :]
-        return clean
+        parts = [part for part in path.replace("/", "\\").strip().strip("\\").split("\\") if part]
+        if parts and parts[0].lower() == project.lower():
+            parts = parts[1:]
+        while parts and parts[0].lower() in {"iteration", "iterations"}:
+            parts = parts[1:]
+        return "\\".join(parts)
 
     def work_item_iteration_path(self, project: str, iteration_result: dict[str, Any], parent_path: str = "") -> str:
         raw_path = iteration_result.get("path", "").strip("\\")

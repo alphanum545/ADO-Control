@@ -6,7 +6,7 @@ os.environ.setdefault("ADO_ORG", "test-org")
 os.environ.setdefault("ADO_PAT", "test-pat")
 os.environ.setdefault("LLM_API_KEY", "test-key")
 
-from ado_ops.ado_client import _format_iteration_date
+from ado_ops.ado_client import ADOClient, ADOConfig, _format_iteration_date
 
 
 def test_format_iteration_date_converts_date_only_to_utc_datetime():
@@ -15,3 +15,11 @@ def test_format_iteration_date_converts_date_only_to_utc_datetime():
 
 def test_format_iteration_date_preserves_datetime_as_utc():
     assert _format_iteration_date("2026-05-01T05:30:00+05:30") == "2026-05-01T00:00:00Z"
+
+
+def test_relative_iteration_path_strips_project_and_iteration_root():
+    client = ADOClient(ADOConfig(org="test-org", pat="test-pat"))
+
+    assert client._relative_iteration_path("Alpha", "Alpha\\Iteration\\AI Test Sprint") == "AI Test Sprint"
+    assert client._relative_iteration_path("Alpha", "Iteration/AI Test Sprint") == "AI Test Sprint"
+    assert client._relative_iteration_path("Alpha", "Iterations\\Release 1\\Sprint 1") == "Release 1\\Sprint 1"
