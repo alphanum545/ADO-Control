@@ -14,6 +14,14 @@ VALID_OPERATIONS = {"list", "read", "create", "update", "delete"}
 
 PROJECT_FIELDS = {"name", "description", "abbreviation", "visibility", "process_name", "source_control_type"}
 SPRINT_FIELDS = {"name", "start_date", "finish_date", "parent_path", "add_to_team"}
+FIELD_ALIASES = {
+    "sprint": {
+        "startDate": "start_date",
+        "finishDate": "finish_date",
+        "start_date": "start_date",
+        "finish_date": "finish_date",
+    }
+}
 WORK_ITEM_FIELDS = {
     "System.Title",
     "System.Description",
@@ -167,14 +175,16 @@ def _sanitize_fields(resource: str, fields: Any) -> tuple[dict[str, Any], list[s
         "work_item": WORK_ITEM_FIELDS,
     }.get(resource, set())
     clean = {}
+    aliases = FIELD_ALIASES.get(resource, {})
     for field, value in fields.items():
-        if field not in allowed:
+        normalized_field = aliases.get(field, field)
+        if normalized_field not in allowed:
             warnings.append(f"Dropped disallowed {resource} field: {field}")
             continue
         if not isinstance(value, SCALAR_TYPES):
             warnings.append(f"Dropped non-scalar {resource} field: {field}")
             continue
-        clean[field] = value
+        clean[normalized_field] = value
     return clean, warnings
 
 

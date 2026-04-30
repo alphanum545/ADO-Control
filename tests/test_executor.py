@@ -73,3 +73,30 @@ def test_sprint_create_accepts_dates():
     assert action["skipped"] is False
     assert action["fields"]["start_date"] == "2026-05-01"
     assert action["fields"]["finish_date"] == "2026-05-15"
+
+
+def test_sprint_create_accepts_camel_case_date_fields():
+    plan = {
+        "summary": "Create sprint.",
+        "actions": [
+            {
+                "resource": "sprint",
+                "operation": "create",
+                "project": "Alpha",
+                "name": "AI Test Sprint",
+                "fields": {
+                    "startDate": "2026-05-01",
+                    "finishDate": "2026-05-15",
+                },
+            }
+        ],
+    }
+
+    normalized = normalize_plan(plan)
+
+    action = normalized["actions"][0]
+    assert action["skipped"] is False
+    assert action["fields"]["start_date"] == "2026-05-01"
+    assert action["fields"]["finish_date"] == "2026-05-15"
+    assert "Dropped disallowed sprint field: startDate" not in normalized["warnings"]
+    assert "Dropped disallowed sprint field: finishDate" not in normalized["warnings"]
